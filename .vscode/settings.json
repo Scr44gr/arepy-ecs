@@ -1,0 +1,27 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.analysis.typeCheckingMode": "standard",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}\\src"
+    ],
+    "python.analysis.exclude": [
+        "${workspaceFolder}\\target",
+        "${workspaceFolder}\\.venv"
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports.ruff": "explicit",
+            "source.fixAll.ruff": "explicit"
+        }
+    },
+    "files.exclude": {
+        "**/target": true
+    },
+    "rust-analyzer.check.command": "clippy"
+}

@@ -1,0 +1,9 @@
+[package]
+name = "arepy_ecs_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors = ["Abrahan <scr44gr@protonmail.com>"]
+
+[dependencies]
+thiserror = "2.0"
