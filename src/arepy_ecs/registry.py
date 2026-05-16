@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-from types import ModuleType
 from typing import Any, TypeVar, get_origin, get_type_hints
 
 import numpy as np
@@ -100,7 +99,10 @@ class Registry:
             self._invoke_system(system)
 
     def get_resource(self, resource_name: str) -> object | None:
-        return self.resources.get(resource_name) or self.global_resources.get(resource_name)
+        resource = self.resources.get(resource_name)
+        if resource is not None:
+            return resource
+        return self.global_resources.get(resource_name)
 
     def query_entities(
         self,
@@ -199,11 +201,11 @@ class Registry:
                 raise ResourceNotFoundError(parameter_name)
             return resource
 
-        for resource in (*self.resources.values(), *self.global_resources.values()):
-            if isinstance(annotation, ModuleType) and resource is annotation:
-                return resource
-            if isinstance(annotation, type) and isinstance(resource, annotation):
-                return resource
-            if resource is annotation:
-                return resource
-        raise ResourceNotFoundError(getattr(annotation, "__name__", parameter_name))
+        resource_name = getattr(annotation, "__name__", parameter_name)
+        resource = self.resources.get(resource_name)
+        if resource is not None:
+            return resource
+        resource = self.global_resources.get(resource_name)
+        if resource is not None:
+            return resource
+        raise ResourceNotFoundError(resource_name)

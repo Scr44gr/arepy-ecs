@@ -49,25 +49,28 @@ class World:
         self._registry.resources[key] = resource
 
     def get_resource(self, resource_type: type[TResource] | ModuleType) -> TResource | ModuleType:
-        world_resource = self.get_world_resource(resource_type)
+        resource_name = getattr(resource_type, "__name__", repr(resource_type))
+        world_resource = self._registry.resources.get(resource_name)
         if world_resource is not None:
             return world_resource
-        global_resource = self.get_global_resource(resource_type)
+        global_resource = self._registry.global_resources.get(resource_name)
         if global_resource is not None:
             return global_resource
-        raise ResourceNotFoundError(getattr(resource_type, "__name__", repr(resource_type)))
+        raise ResourceNotFoundError(resource_name)
 
     def get_world_resource(
         self,
         resource_type: type[TResource] | ModuleType,
     ) -> TResource | ModuleType | None:
-        return _match_resource(self._registry.resources.values(), resource_type)
+        resource_name = getattr(resource_type, "__name__", repr(resource_type))
+        return self._registry.resources.get(resource_name)
 
     def get_global_resource(
         self,
         resource_type: type[TResource] | ModuleType,
     ) -> TResource | ModuleType | None:
-        return _match_resource(self._registry.global_resources.values(), resource_type)
+        resource_name = getattr(resource_type, "__name__", repr(resource_type))
+        return self._registry.global_resources.get(resource_name)
 
     def on_startup(self, callback: object) -> object:
         self._startup_callbacks.append(callback)
@@ -87,16 +90,3 @@ class World:
 
     def get_registry(self) -> Registry:
         return self._registry
-
-
-def _match_resource(
-    resources: object, resource_type: type[TResource] | ModuleType
-) -> TResource | ModuleType | None:
-    for resource in resources:
-        if isinstance(resource_type, ModuleType):
-            if resource is resource_type:
-                return resource
-            continue
-        if isinstance(resource, resource_type):
-            return resource
-    return None
