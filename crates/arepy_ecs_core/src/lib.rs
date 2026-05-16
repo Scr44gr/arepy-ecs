@@ -48,9 +48,7 @@ pub enum CoreError {
 pub enum ValueKind {
     Bool,
     Int32,
-    Int64,
     Float32,
-    Float64,
 }
 
 impl ValueKind {
@@ -63,12 +61,8 @@ impl ValueKind {
     pub fn parse(name: &str) -> CoreResult<Self> {
         match name {
             "bool" | "Bool" | "numpy.bool_" | "np.bool_" => Ok(Self::Bool),
-            "int32" | "Int32" | "numpy.int32" | "np.int32" => Ok(Self::Int32),
-            "int64" | "Int64" | "int" | "numpy.int64" | "np.int64" => Ok(Self::Int64),
-            "float32" | "Float32" | "numpy.float32" | "np.float32" => Ok(Self::Float32),
-            "float64" | "Float64" | "float" | "numpy.float64" | "np.float64" => {
-                Ok(Self::Float64)
-            }
+            "int32" | "Int32" | "int" | "numpy.int32" | "np.int32" => Ok(Self::Int32),
+            "float32" | "Float32" | "float" | "numpy.float32" | "np.float32" => Ok(Self::Float32),
             other => Err(CoreError::UnsupportedFieldKind(other.to_string())),
         }
     }
@@ -78,9 +72,7 @@ impl ValueKind {
         match self {
             Self::Bool => "bool",
             Self::Int32 => "int32",
-            Self::Int64 => "int64",
             Self::Float32 => "float32",
-            Self::Float64 => "float64",
         }
     }
 
@@ -89,9 +81,7 @@ impl ValueKind {
         match self {
             Self::Bool => std::mem::size_of::<bool>(),
             Self::Int32 => std::mem::size_of::<i32>(),
-            Self::Int64 => std::mem::size_of::<i64>(),
             Self::Float32 => std::mem::size_of::<f32>(),
-            Self::Float64 => std::mem::size_of::<f64>(),
         }
     }
 }
@@ -101,9 +91,7 @@ impl ValueKind {
 pub enum RuntimeValue {
     Bool(bool),
     Int32(i32),
-    Int64(i64),
     Float32(f32),
-    Float64(f64),
 }
 
 impl RuntimeValue {
@@ -112,9 +100,7 @@ impl RuntimeValue {
         match self {
             Self::Bool(_) => ValueKind::Bool,
             Self::Int32(_) => ValueKind::Int32,
-            Self::Int64(_) => ValueKind::Int64,
             Self::Float32(_) => ValueKind::Float32,
-            Self::Float64(_) => ValueKind::Float64,
         }
     }
 
@@ -144,18 +130,14 @@ pub struct FieldBufferInfo {
 pub enum FieldSnapshot {
     Bool(Vec<bool>),
     Int32(Vec<i32>),
-    Int64(Vec<i64>),
     Float32(Vec<f32>),
-    Float64(Vec<f64>),
 }
 
 #[derive(Debug)]
 enum FieldColumn {
     Bool(Vec<bool>),
     Int32(Vec<i32>),
-    Int64(Vec<i64>),
     Float32(Vec<f32>),
-    Float64(Vec<f64>),
 }
 
 impl FieldColumn {
@@ -163,9 +145,7 @@ impl FieldColumn {
         match kind {
             ValueKind::Bool => Self::Bool(Vec::new()),
             ValueKind::Int32 => Self::Int32(Vec::new()),
-            ValueKind::Int64 => Self::Int64(Vec::new()),
             ValueKind::Float32 => Self::Float32(Vec::new()),
-            ValueKind::Float64 => Self::Float64(Vec::new()),
         }
     }
 
@@ -173,9 +153,7 @@ impl FieldColumn {
         match (self, value) {
             (Self::Bool(values), RuntimeValue::Bool(value)) => values.push(*value),
             (Self::Int32(values), RuntimeValue::Int32(value)) => values.push(*value),
-            (Self::Int64(values), RuntimeValue::Int64(value)) => values.push(*value),
             (Self::Float32(values), RuntimeValue::Float32(value)) => values.push(*value),
-            (Self::Float64(values), RuntimeValue::Float64(value)) => values.push(*value),
             (column, received) => {
                 return Err(CoreError::FieldTypeMismatch {
                     field: field_name.to_string(),
@@ -191,9 +169,7 @@ impl FieldColumn {
         match self {
             Self::Bool(values) => RuntimeValue::Bool(values[row]),
             Self::Int32(values) => RuntimeValue::Int32(values[row]),
-            Self::Int64(values) => RuntimeValue::Int64(values[row]),
             Self::Float32(values) => RuntimeValue::Float32(values[row]),
-            Self::Float64(values) => RuntimeValue::Float64(values[row]),
         }
     }
 
@@ -201,9 +177,7 @@ impl FieldColumn {
         match (self, value) {
             (Self::Bool(values), RuntimeValue::Bool(value)) => values[row] = *value,
             (Self::Int32(values), RuntimeValue::Int32(value)) => values[row] = *value,
-            (Self::Int64(values), RuntimeValue::Int64(value)) => values[row] = *value,
             (Self::Float32(values), RuntimeValue::Float32(value)) => values[row] = *value,
-            (Self::Float64(values), RuntimeValue::Float64(value)) => values[row] = *value,
             (column, received) => {
                 return Err(CoreError::FieldTypeMismatch {
                     field: field_name.to_string(),
@@ -223,13 +197,7 @@ impl FieldColumn {
             Self::Int32(values) => {
                 values.swap_remove(row);
             }
-            Self::Int64(values) => {
-                values.swap_remove(row);
-            }
             Self::Float32(values) => {
-                values.swap_remove(row);
-            }
-            Self::Float64(values) => {
                 values.swap_remove(row);
             }
         }
@@ -239,9 +207,7 @@ impl FieldColumn {
         match self {
             Self::Bool(_) => ValueKind::Bool,
             Self::Int32(_) => ValueKind::Int32,
-            Self::Int64(_) => ValueKind::Int64,
             Self::Float32(_) => ValueKind::Float32,
-            Self::Float64(_) => ValueKind::Float64,
         }
     }
 
@@ -249,9 +215,7 @@ impl FieldColumn {
         match self {
             Self::Bool(values) => FieldSnapshot::Bool(values.clone()),
             Self::Int32(values) => FieldSnapshot::Int32(values.clone()),
-            Self::Int64(values) => FieldSnapshot::Int64(values.clone()),
             Self::Float32(values) => FieldSnapshot::Float32(values.clone()),
-            Self::Float64(values) => FieldSnapshot::Float64(values.clone()),
         }
     }
 
@@ -259,9 +223,7 @@ impl FieldColumn {
         match self {
             Self::Bool(values) => values.len(),
             Self::Int32(values) => values.len(),
-            Self::Int64(values) => values.len(),
             Self::Float32(values) => values.len(),
-            Self::Float64(values) => values.len(),
         }
     }
 
@@ -269,9 +231,7 @@ impl FieldColumn {
         match self {
             Self::Bool(values) => values.as_mut_ptr().cast(),
             Self::Int32(values) => values.as_mut_ptr().cast(),
-            Self::Int64(values) => values.as_mut_ptr().cast(),
             Self::Float32(values) => values.as_mut_ptr().cast(),
-            Self::Float64(values) => values.as_mut_ptr().cast(),
         }
     }
 }
@@ -749,11 +709,11 @@ mod tests {
                 vec![
                     FieldDefinition {
                         name: "x".to_string(),
-                        kind: ValueKind::Float64,
+                        kind: ValueKind::Float32,
                     },
                     FieldDefinition {
                         name: "y".to_string(),
-                        kind: ValueKind::Float64,
+                        kind: ValueKind::Float32,
                     },
                 ],
             )
@@ -763,7 +723,7 @@ mod tests {
                 "Velocity",
                 vec![FieldDefinition {
                     name: "x".to_string(),
-                    kind: ValueKind::Float64,
+                    kind: ValueKind::Float32,
                 }],
             )
             .unwrap();
@@ -776,8 +736,8 @@ mod tests {
                 moving,
                 "Position",
                 &HashMap::from([
-                    ("x".to_string(), RuntimeValue::Float64(1.0)),
-                    ("y".to_string(), RuntimeValue::Float64(2.0)),
+                    ("x".to_string(), RuntimeValue::Float32(1.0)),
+                    ("y".to_string(), RuntimeValue::Float32(2.0)),
                 ]),
             )
             .unwrap();
@@ -785,7 +745,7 @@ mod tests {
             .add_component(
                 moving,
                 "Velocity",
-                &HashMap::from([("x".to_string(), RuntimeValue::Float64(0.5))]),
+                &HashMap::from([("x".to_string(), RuntimeValue::Float32(0.5))]),
             )
             .unwrap();
         world
@@ -793,8 +753,8 @@ mod tests {
                 static_entity,
                 "Position",
                 &HashMap::from([
-                    ("x".to_string(), RuntimeValue::Float64(4.0)),
-                    ("y".to_string(), RuntimeValue::Float64(5.0)),
+                    ("x".to_string(), RuntimeValue::Float32(4.0)),
+                    ("y".to_string(), RuntimeValue::Float32(5.0)),
                 ]),
             )
             .unwrap();
@@ -815,7 +775,7 @@ mod tests {
                 "Position",
                 vec![FieldDefinition {
                     name: "x".to_string(),
-                    kind: ValueKind::Float64,
+                    kind: ValueKind::Float32,
                 }],
             )
             .unwrap();
@@ -825,7 +785,7 @@ mod tests {
             .add_component(
                 entity,
                 "Position",
-                &HashMap::from([("x".to_string(), RuntimeValue::Float64(1.0))]),
+                &HashMap::from([("x".to_string(), RuntimeValue::Float32(1.0))]),
             )
             .unwrap();
 
@@ -837,7 +797,7 @@ mod tests {
             .add_component(
                 other,
                 "Position",
-                &HashMap::from([("x".to_string(), RuntimeValue::Float64(2.0))]),
+                &HashMap::from([("x".to_string(), RuntimeValue::Float32(2.0))]),
             )
             .unwrap_err();
         assert_eq!(error, CoreError::ActiveViews("Position".to_string()));
@@ -847,7 +807,7 @@ mod tests {
             .add_component(
                 other,
                 "Position",
-                &HashMap::from([("x".to_string(), RuntimeValue::Float64(2.0))]),
+                &HashMap::from([("x".to_string(), RuntimeValue::Float32(2.0))]),
             )
             .unwrap();
     }

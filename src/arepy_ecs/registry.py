@@ -19,9 +19,7 @@ TComponent = TypeVar("TComponent", bound=Component)
 _NUMPY_DTYPES = {
     "bool": np.bool_,
     "int32": np.int32,
-    "int64": np.int64,
     "float32": np.float32,
-    "float64": np.float64,
 }
 
 
@@ -74,7 +72,7 @@ class Registry:
         self._ensure_component_registered(component_type)
         if not self.has_component(entity, component_type):
             return None
-        return component_type.make_proxy(self, entity.get_id()) # type: ignore
+        return component_type.make_proxy(self, entity.get_id())  # type: ignore
 
     def remove_component(self, entity: Entity, component_type: type[TComponent]) -> None:
         self._ensure_component_registered(component_type)
@@ -116,17 +114,19 @@ class Registry:
             for entity_id in self._native.query_entities(include_names, exclude_names)
         ]
 
-    def component_field_ndarray(self, component_type: type[Component], field_name: str) -> np.ndarray:
+    def component_field_ndarray(
+        self, component_type: type[Component], field_name: str
+    ) -> np.ndarray:
         view = self.component_field_view(component_type, field_name)
         dtype = _NUMPY_DTYPES[component_type.field_kind(field_name)]
-        return np.frombuffer(view, dtype=dtype, count=len(view)) # type: ignore
+        return np.frombuffer(view, dtype=dtype, count=len(view))  # type: ignore
 
     def component_field_array(self, component_type: type[Component], field_name: str) -> np.ndarray:
         return self.component_field_ndarray(component_type, field_name)
 
     def component_batch(self, component_type: type[TComponent]) -> TComponent:
         self._ensure_component_registered(component_type)
-        return component_type.make_batch(self) # type: ignore
+        return component_type.make_batch(self)  # type: ignore
 
     def component_field_view(self, component_type: type[Component], field_name: str) -> FieldView:
         self._ensure_component_registered(component_type)
@@ -137,7 +137,7 @@ class Registry:
         component_type: type[Component],
         field_name: str,
     ) -> memoryview:
-        return memoryview(self.component_field_view(component_type, field_name)) # type: ignore
+        return memoryview(self.component_field_view(component_type, field_name))  # type: ignore
 
     def _get_component_field(
         self,

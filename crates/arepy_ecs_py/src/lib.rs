@@ -44,9 +44,7 @@ fn buffer_format(kind: ValueKind) -> [c_char; 2] {
     match kind {
         ValueKind::Bool => [b'?'.cast_signed(), 0],
         ValueKind::Int32 => [b'i'.cast_signed(), 0],
-        ValueKind::Int64 => [b'q'.cast_signed(), 0],
         ValueKind::Float32 => [b'f'.cast_signed(), 0],
-        ValueKind::Float64 => [b'd'.cast_signed(), 0],
     }
 }
 
@@ -68,19 +66,7 @@ fn runtime_value_to_object(py: Python<'_>, value: RuntimeValue) -> Py<PyAny> {
                 .expect("primitive Python conversion should not fail");
             object.to_owned().into_any().unbind()
         }
-        RuntimeValue::Int64(value) => {
-            let object = value
-                .into_pyobject(py)
-                .expect("primitive Python conversion should not fail");
-            object.to_owned().into_any().unbind()
-        }
         RuntimeValue::Float32(value) => {
-            let object = value
-                .into_pyobject(py)
-                .expect("primitive Python conversion should not fail");
-            object.to_owned().into_any().unbind()
-        }
-        RuntimeValue::Float64(value) => {
             let object = value
                 .into_pyobject(py)
                 .expect("primitive Python conversion should not fail");
@@ -115,29 +101,9 @@ fn py_any_to_runtime_value(
                     received: "python object",
                 })
             }),
-        ValueKind::Int64 => value
-            .extract::<i64>()
-            .map(RuntimeValue::Int64)
-            .map_err(|_| {
-                core_error(CoreError::FieldTypeMismatch {
-                    field: field_name.to_string(),
-                    expected: kind.as_str(),
-                    received: "python object",
-                })
-            }),
         ValueKind::Float32 => value
             .extract::<f32>()
             .map(RuntimeValue::Float32)
-            .map_err(|_| {
-                core_error(CoreError::FieldTypeMismatch {
-                    field: field_name.to_string(),
-                    expected: kind.as_str(),
-                    received: "python object",
-                })
-            }),
-        ValueKind::Float64 => value
-            .extract::<f64>()
-            .map(RuntimeValue::Float64)
             .map_err(|_| {
                 core_error(CoreError::FieldTypeMismatch {
                     field: field_name.to_string(),
@@ -414,9 +380,7 @@ impl RawWorld {
         let list = match snapshot {
             FieldSnapshot::Bool(values) => PyList::new(py, values)?,
             FieldSnapshot::Int32(values) => PyList::new(py, values)?,
-            FieldSnapshot::Int64(values) => PyList::new(py, values)?,
             FieldSnapshot::Float32(values) => PyList::new(py, values)?,
-            FieldSnapshot::Float64(values) => PyList::new(py, values)?,
         };
         Ok(list.into_any().unbind())
     }

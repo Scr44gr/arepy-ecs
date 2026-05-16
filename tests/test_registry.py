@@ -33,10 +33,10 @@ def test_component_field_array_exposes_zero_copy_numpy_view() -> None:
     xs = registry.component_field_array(Position, "x")
 
     assert isinstance(xs, np.ndarray)
-    assert xs.dtype == np.float64
+    assert xs.dtype == np.float32
     assert xs.tolist() == [1.25, 4.5]
 
-    xs += np.array([1.0, -2.0], dtype=np.float64)
+    xs += np.array([1.0, -2.0], dtype=np.float32)
 
     assert first.get_component(Position).x == 2.25
     assert second.get_component(Position).x == 2.5
@@ -52,7 +52,7 @@ def test_component_field_memoryview_is_writable_and_updates_rust_storage() -> No
     assert isinstance(raw, memoryview)
     assert raw.readonly is False
 
-    np.frombuffer(raw, dtype=np.float64)[0] = 8.75
+    np.frombuffer(raw, dtype=np.float32)[0] = 8.75
 
     assert entity.get_component(Position).x == 8.75
 
@@ -72,3 +72,22 @@ def test_component_field_view_blocks_structural_mutation_until_released() -> Non
 
     entity = world.create_entity().with_component(Position(x=3.0, y=4.0)).build()
     assert entity.get_component(Position).x == 3.0
+
+
+def test_builtin_numeric_annotations_use_32_bit_storage() -> None:
+    class Stats(Component):
+        health: int = 100
+        speed: float = 1.5
+
+    world = World("demo")
+    registry = world.get_registry()
+    entity = world.create_entity().with_component(Stats(health=7, speed=2.5)).build()
+
+    healths = registry.component_field_array(Stats, "health")
+    speeds = registry.component_field_array(Stats, "speed")
+
+    assert healths.dtype == np.int32
+    assert speeds.dtype == np.float32
+    assert int(healths[0]) == 7
+    assert float(speeds[0]) == pytest.approx(2.5)
+    assert entity.get_component(Stats).health == 7

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .builders import EntityBuilder
-from .components import Bool, Component, Float32, Float64, Int32, Int64
+from .components import Bool, Component, Float32, Int32
 from .entities import Entities, Entity
 from .query import Query, With, Without
 from .registry import Registry
@@ -15,9 +15,7 @@ __all__ = [
     "Entity",
     "EntityBuilder",
     "Float32",
-    "Float64",
     "Int32",
-    "Int64",
     "Query",
     "Registry",
     "System",

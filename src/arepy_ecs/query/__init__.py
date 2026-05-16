@@ -13,6 +13,7 @@ from typing import (
     cast,
     get_args,
     get_origin,
+    get_type_hints,
 )
 
 from ..components import Component
@@ -167,15 +168,16 @@ def build_query_from_annotation(annotation: Any) -> Query[Any, Any]:
 
 def get_signed_query_arguments(function: Any) -> OrderedDict[str, Any]:
     signed_arguments: OrderedDict[str, Any] = OrderedDict()
+    resolved_annotations = get_type_hints(function, include_extras=True)
     for parameter in inspect.signature(function).parameters.values():
-        annotation = parameter.annotation
+        annotation = resolved_annotations.get(parameter.name, parameter.annotation)
         if get_origin(annotation) is Query:
             signed_arguments[parameter.name] = annotation
     return signed_arguments
 
 
 def sign_queries(queries_signature: list[tuple[str, Any]]) -> list[tuple[str, Query[Any, Any]]]:
-    return [(name, factory()) for name, factory in queries_signature]
+    return [(name, build_query_from_annotation(annotation)) for name, annotation in queries_signature]
 
 
 def get_queries_instance_from_arguments(args: Sequence[object]) -> list[Query[Any, Any]]:

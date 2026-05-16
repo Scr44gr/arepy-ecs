@@ -6,40 +6,30 @@ import numpy as np
 
 Bool = np.bool_
 Int32 = np.int32
-Int64 = np.int64
 Float32 = np.float32
-Float64 = np.float64
 
 _MISSING = object()
 _FIELD_KIND_BY_TYPE: dict[Any, str] = {
     bool: "bool",
-    int: "int64",
-    float: "float64",
+    int: "int32",
+    float: "float32",
     Bool: "bool",
     Int32: "int32",
-    Int64: "int64",
     Float32: "float32",
-    Float64: "float64",
 }
 _FIELD_KIND_BY_NAME: dict[str, str] = {
     "bool": "bool",
     "Bool": "bool",
-    "int": "int64",
+    "int": "int32",
     "Int32": "int32",
-    "Int64": "int64",
-    "float": "float64",
+    "float": "float32",
     "Float32": "float32",
-    "Float64": "float64",
     "np.bool_": "bool",
     "np.int32": "int32",
-    "np.int64": "int64",
     "np.float32": "float32",
-    "np.float64": "float64",
     "numpy.bool_": "bool",
     "numpy.int32": "int32",
-    "numpy.int64": "int64",
     "numpy.float32": "float32",
-    "numpy.float64": "float64",
 }
 
 
