@@ -9,20 +9,21 @@ from typing import (
     Generic,
     TypeVar,
     TypeVarTuple,
-    overload,
     cast,
     get_args,
     get_origin,
     get_type_hints,
+    overload,
 )
 
 from ..components import Component
+from ..entities import Entity
 from .exceptions import QueryDefinitionError
 
 if TYPE_CHECKING:
     from ..registry import Registry
 
-TEntity = TypeVar("TEntity")
+TEntity = TypeVar("TEntity", bound=Entity)
 TFilter = TypeVar("TFilter")
 Ts = TypeVarTuple("Ts")
 TComponent1 = TypeVar("TComponent1", bound=Component)
@@ -62,13 +63,14 @@ class Query(Generic[TEntity, TFilter]):
         return set(self)
 
     @overload
-    def result(self, component_type_1: type[TComponent1]) -> tuple[TComponent1]: ...
+    def result(self, component_type_1: type[TComponent1], /) -> tuple[TComponent1]: ...
 
     @overload
     def result(
         self,
         component_type_1: type[TComponent1],
         component_type_2: type[TComponent2],
+        /,
     ) -> tuple[TComponent1, TComponent2]: ...
 
     @overload
@@ -77,6 +79,7 @@ class Query(Generic[TEntity, TFilter]):
         component_type_1: type[TComponent1],
         component_type_2: type[TComponent2],
         component_type_3: type[TComponent3],
+        /,
     ) -> tuple[TComponent1, TComponent2, TComponent3]: ...
 
     @overload
@@ -86,6 +89,7 @@ class Query(Generic[TEntity, TFilter]):
         component_type_2: type[TComponent2],
         component_type_3: type[TComponent3],
         component_type_4: type[TComponent4],
+        /,
     ) -> tuple[TComponent1, TComponent2, TComponent3, TComponent4]: ...
 
     def result(self, *component_types: type[Component]) -> tuple[Component, ...]:
@@ -177,7 +181,9 @@ def get_signed_query_arguments(function: Any) -> OrderedDict[str, Any]:
 
 
 def sign_queries(queries_signature: list[tuple[str, Any]]) -> list[tuple[str, Query[Any, Any]]]:
-    return [(name, build_query_from_annotation(annotation)) for name, annotation in queries_signature]
+    return [
+        (name, build_query_from_annotation(annotation)) for name, annotation in queries_signature
+    ]
 
 
 def get_queries_instance_from_arguments(args: Sequence[object]) -> list[Query[Any, Any]]:
