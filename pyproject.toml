@@ -5,15 +5,18 @@ build-backend = "maturin"
 
 [project]
 name = "arepy-ecs"
-version = "0.1.0"
 authors = [{ name = "Abrahan", email = "scr44gr@protonmail.com" }]
 description = "High-performance Entity Component System (ECS) for Python, powered by Rust."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
+dynamic = ['version']
 dependencies = [
     "numpy>=2.1,<3.0",
 ]
+
+[tool.setuptools.dynamic]
+version = { attr = "src.arepy_ecs.__version__" }
 
 [dependency-groups]
 dev = [
