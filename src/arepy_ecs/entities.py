@@ -16,13 +16,7 @@ TComponent = TypeVar("TComponent", bound=Component)
 class Entity:
     _registry: Registry
     _entity_id: int
-    _component_cache: dict[type[Component], Component] = field(
-        default_factory=dict,
-        init=False,
-        repr=False,
-        compare=False,
-        hash=False,
-    )
+    _component_cache: dict[type[Component], Component] = field(default_factory=dict, init=False, repr=False)
 
     def get_id(self) -> int:
         return self._entity_id
@@ -31,9 +25,11 @@ class Entity:
         component = self._component_cache.get(component_type)
         if component is None:
             component = self._registry.get_component(self, component_type)
+            if component is not None:
+                self._component_cache[component_type] = component
+
         if component is None:
             raise ComponentNotFoundError(component_type.__name__)
-        self._component_cache[component_type] = component
         return component
 
     def add_component(self, component: Component) -> None:

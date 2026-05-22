@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, TypeVar, get_origin, get_type_hints
+from dataclasses import dataclass
+from typing import Any, TypeAlias, TypeVar, get_origin, get_type_hints
 
 import numpy as np
 
@@ -22,6 +23,19 @@ _NUMPY_DTYPES = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class _QueryArgumentPlan:
+    query: Query[Any, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _ResourceArgumentPlan:
+    resource_name: str
+
+
+SystemArgumentPlan: TypeAlias = _QueryArgumentPlan | _ResourceArgumentPlan
+
+
 class Registry:
     def __init__(self, global_resources: dict[str, object] | None = None) -> None:
         self._native = RawWorld()
@@ -31,6 +45,7 @@ class Registry:
         self._systems: dict[SystemPipeline, dict[SystemState, dict[System, None]]] = {
             pipeline: {state: {} for state in SystemState} for pipeline in SystemPipeline
         }
+        self._system_argument_plans: dict[System, tuple[SystemArgumentPlan, ...]] = {}
         self.resources: dict[str, object] = {}
         self.global_resources: dict[str, object] = dict(global_resources or {})
 
@@ -100,6 +115,7 @@ class Registry:
     def add_system(self, pipeline: SystemPipeline, state: SystemState, system: System) -> None:
         for current_state in SystemState:
             self._systems[pipeline][current_state].pop(system, None)
+        self._system_argument_plans.pop(system, None)
         self._systems[pipeline][state][system] = None
 
     def set_system_state(
@@ -125,12 +141,16 @@ class Registry:
         include_types: tuple[type[Any], ...],
         exclude_types: tuple[type[Any], ...],
     ) -> list[Entity]:
+        return [self._entity(entity_id) for entity_id in self._query_entity_ids(include_types, exclude_types)]
+
+    def _query_entity_ids(
+        self,
+        include_types: tuple[type[Any], ...],
+        exclude_types: tuple[type[Any], ...],
+    ) -> list[int]:
         include_names = [component_type.__name__ for component_type in include_types]
         exclude_names = [component_type.__name__ for component_type in exclude_types]
-        return [
-            self._entity(entity_id)
-            for entity_id in self._native.query_entities(include_names, exclude_names)
-        ]
+        return self._native.query_entities(include_names, exclude_names)
 
     def component_field_ndarray(
         self, component_type: type[Component], field_name: str
@@ -246,28 +266,49 @@ class Registry:
         values[field_name] = value
 
     def _invoke_system(self, system: System) -> None:
-        arguments: list[object] = []
+        arguments = self._build_system_arguments(system)
+        system(*arguments)
+
+    def _compile_system_arguments(self, system: System) -> tuple[SystemArgumentPlan, ...]:
+        argument_plans = self._system_argument_plans.get(system)
+        if argument_plans is not None:
+            return argument_plans
+
+        compiled_arguments: list[SystemArgumentPlan] = []
         resolved_annotations = get_type_hints(system, include_extras=True)
         for parameter in inspect.signature(system).parameters.values():
             annotation = resolved_annotations.get(parameter.name, parameter.annotation)
             if get_origin(annotation) is Query:
-                query = build_query_from_annotation(annotation)
+                compiled_arguments.append(_QueryArgumentPlan(build_query_from_annotation(annotation)))
+                continue
+            compiled_arguments.append(
+                _ResourceArgumentPlan(self._resource_name(parameter.name, annotation))
+            )
+
+        argument_plans = tuple(compiled_arguments)
+        self._system_argument_plans[system] = argument_plans
+        return argument_plans
+
+    def _build_system_arguments(self, system: System) -> list[object]:
+        arguments: list[object] = []
+        for argument_plan in self._compile_system_arguments(system):
+            if isinstance(argument_plan, _QueryArgumentPlan):
+                query = argument_plan.query
                 query.set_registry(self)
                 arguments.append(query)
                 continue
-            arguments.append(self._resolve_resource(parameter.name, annotation))
-        system(*arguments)
+            arguments.append(self._resolve_resource_name(argument_plan.resource_name))
+        return arguments
+
+    def _resource_name(self, parameter_name: str, annotation: Any) -> str:
+        if annotation is inspect._empty:
+            return parameter_name
+        return getattr(annotation, "__name__", parameter_name)
 
     def _resolve_resource(self, parameter_name: str, annotation: Any) -> object:
-        if annotation is inspect._empty:
-            resource = self.resources.get(parameter_name) or self.global_resources.get(
-                parameter_name
-            )
-            if resource is None:
-                raise ResourceNotFoundError(parameter_name)
-            return resource
+        return self._resolve_resource_name(self._resource_name(parameter_name, annotation))
 
-        resource_name = getattr(annotation, "__name__", parameter_name)
+    def _resolve_resource_name(self, resource_name: str) -> object:
         resource = self.resources.get(resource_name)
         if resource is not None:
             return resource

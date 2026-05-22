@@ -11,8 +11,8 @@ class Vec2(VectorValue):
     __slots__ = ("x", "y")
 
     def __init__(self, x: float = 0.0, y: float = 0.0) -> None:
-        object.__setattr__(self, "x", x)
-        object.__setattr__(self, "y", y)
+        self.x = x
+        self.y = y
 
 
 class Transform(Component):

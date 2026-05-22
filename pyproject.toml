@@ -30,6 +30,7 @@ dev = [
 manifest-path = "crates/arepy_ecs_py/Cargo.toml"
 python-source = "src"
 module-name = "arepy_ecs._native"
+include = [{ path = "src/arepy_ecs/py.typed", format = "sdist" }]
 
 [tool.pytest.ini_options]
 addopts = "-q"

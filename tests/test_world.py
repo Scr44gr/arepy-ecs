@@ -93,6 +93,46 @@ def test_world_local_resources_override_global_resources() -> None:
     assert world.get_global_resource(GameConfig) is not None
 
 
+def test_world_system_binding_cache_reads_latest_resource_instance() -> None:
+    world = World("demo")
+    world.add_resource(GameConfig(scale=2.0))
+    world.create_entity().with_component(Position(x=1.0)).build()
+
+    def scale_system(query: Query[Entity, With[Position]], config: GameConfig) -> None:
+        for (position,) in query.iter_components(Position):
+            position.x *= config.scale
+
+    world.add_system(SystemPipeline.UPDATE, scale_system)
+
+    registry = world.get_registry()
+    registry.run(SystemPipeline.UPDATE)
+    world.add_resource(GameConfig(scale=3.0))
+    registry.run(SystemPipeline.UPDATE)
+
+    entity = next(iter(registry.query_entities((Position,), ())))
+    assert entity.get_component(Position).x == 6.0
+
+
+def test_world_system_query_cache_rebuilds_when_matching_entities_change() -> None:
+    world = World("demo")
+    first = world.create_entity().with_component(Position(x=1.0)).build()
+
+    def scale_system(query: Query[Entity, With[Position]]) -> None:
+        for (position,) in query.iter_components(Position):
+            position.x += 1.0
+
+    world.add_system(SystemPipeline.UPDATE, scale_system)
+
+    registry = world.get_registry()
+    registry.run(SystemPipeline.UPDATE)
+
+    second = world.create_entity().with_component(Position(x=10.0)).build()
+    registry.run(SystemPipeline.UPDATE)
+
+    assert first.get_component(Position).x == 3.0
+    assert second.get_component(Position).x == 11.0
+
+
 def test_world_get_resource_supports_module_resources() -> None:
     module_resource = ModuleType("demo_module")
     world = World("demo")

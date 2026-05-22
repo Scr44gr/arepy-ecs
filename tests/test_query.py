@@ -203,6 +203,64 @@ def test_query_iter_entities_components_returns_entity_and_components() -> None:
     assert velocity.y == pytest.approx(8.0)
 
 
+def test_query_iter_components_updates_vector_components() -> None:
+    world = World("demo")
+    entity = (
+        world.create_entity()
+        .with_component(Transform(position=Vec2(2.0, 3.0)))
+        .with_component(Motion(velocity=Vec2(0.5, -1.0)))
+        .build()
+    )
+    query: Query[Entity, With[Transform, Motion]] = Query(include=(Transform, Motion))
+    query.set_registry(world.get_registry())
+
+    for transform, motion in query.iter_components(Transform, Motion):
+        transform.position.x += motion.velocity.x
+        transform.position.y += motion.velocity.y
+
+    refreshed = entity.get_component(Transform)
+    assert refreshed.position.x == pytest.approx(2.5)
+    assert refreshed.position.y == pytest.approx(2.0)
+
+
+def test_query_iter_components_updates_string_fields() -> None:
+    world = World("demo")
+    entity = world.create_entity().with_component(NameTag(name="player")).build()
+    query: Query[Entity, With[NameTag]] = Query(include=(NameTag,))
+    query.set_registry(world.get_registry())
+
+    for (name_tag,) in query.iter_components(NameTag):
+        name_tag.name = "enemy"
+
+    assert entity.get_component(NameTag).name == "enemy"
+
+
+def test_query_iter_components_restores_entity_proxy_behavior_after_iteration() -> None:
+    world = World("demo")
+    entity = world.create_entity().with_component(Position(x=1.0, y=2.0)).build()
+    query: Query[Entity, With[Position]] = Query(include=(Position,))
+    query.set_registry(world.get_registry())
+
+    (position,) = next(query.iter_components(Position))
+    position.x = 3.5
+
+    assert entity.get_component(Position).x == pytest.approx(3.5)
+
+
+def test_query_iter_components_cache_rebuilds_when_matching_entities_change() -> None:
+    world = World("demo")
+    world.create_entity().with_component(Position(x=1.0, y=2.0)).build()
+    query: Query[Entity, With[Position]] = Query(include=(Position,))
+    query.set_registry(world.get_registry())
+
+    assert len(list(query.iter_components(Position))) == 1
+
+    world.create_entity().with_component(Position(x=3.0, y=4.0)).build()
+
+    rows = list(query.iter_components(Position))
+    assert len(rows) == 2
+
+
 def test_query_iteration_returns_empty_when_required_component_is_missing() -> None:
     world = World("demo")
     query: Query[Entity, With[Position, Velocity]] = Query(include=(Position, Velocity))

@@ -90,6 +90,7 @@ class VectorValue:
 
 
 _VECTOR_PROXY_TYPES: dict[type[VectorValue], type[VectorValue]] = {}
+_VECTOR_ROW_PROXY_TYPES: dict[type[VectorValue], type[VectorValue]] = {}
 
 
 def _vector_proxy_getattribute(self: VectorValue, name: str) -> Any:
@@ -117,6 +118,29 @@ def _vector_proxy_setattr(self: VectorValue, name: str, value: Any) -> None:
     object.__setattr__(self, name, value)
 
 
+def _vector_row_getattribute(self: VectorValue, name: str) -> Any:
+    if name in type(self).__ecs_axes__:
+        component = object.__getattribute__(self, "_ecs_row_component")
+        field_name = object.__getattribute__(self, "_ecs_field_name")
+        batch_component = object.__getattribute__(component, "_ecs_batch_component")
+        row_index = object.__getattribute__(component, "_ecs_row_index")
+        batch_vector = object.__getattribute__(batch_component, field_name)
+        return object.__getattribute__(batch_vector, name)[row_index]
+    return object.__getattribute__(self, name)
+
+
+def _vector_row_setattr(self: VectorValue, name: str, value: Any) -> None:
+    if name in type(self).__ecs_axes__:
+        component = object.__getattribute__(self, "_ecs_row_component")
+        field_name = object.__getattribute__(self, "_ecs_field_name")
+        batch_component = object.__getattribute__(component, "_ecs_batch_component")
+        row_index = object.__getattribute__(component, "_ecs_row_index")
+        batch_vector = object.__getattribute__(batch_component, field_name)
+        object.__getattribute__(batch_vector, name)[row_index] = value
+        return
+    object.__setattr__(self, name, value)
+
+
 def _get_vector_proxy_type(vector_type: type[VectorValue]) -> type[VectorValue]:
     proxy_type = _VECTOR_PROXY_TYPES.get(vector_type)
     if proxy_type is not None:
@@ -140,6 +164,27 @@ def _get_vector_proxy_type(vector_type: type[VectorValue]) -> type[VectorValue]:
         ),
     )
     _VECTOR_PROXY_TYPES[vector_type] = proxy_type
+    return proxy_type
+
+
+def _get_vector_row_proxy_type(vector_type: type[VectorValue]) -> type[VectorValue]:
+    proxy_type = _VECTOR_ROW_PROXY_TYPES.get(vector_type)
+    if proxy_type is not None:
+        return proxy_type
+
+    proxy_type = cast(
+        type[VectorValue],
+        type(
+            f"_RowBound{vector_type.__name__}",
+            (vector_type,),
+            {
+                "__slots__": ("_ecs_row_component", "_ecs_field_name"),
+                "__getattribute__": _vector_row_getattribute,
+                "__setattr__": _vector_row_setattr,
+            },
+        ),
+    )
+    _VECTOR_ROW_PROXY_TYPES[vector_type] = proxy_type
     return proxy_type
 
 
@@ -187,6 +232,18 @@ def _bind_vector_proxy(
     return cast(VectorValue, instance)
 
 
+def _bind_vector_row_proxy(
+    vector_type: type[VectorValue],
+    component: Component,
+    field_name: str,
+) -> VectorValue:
+    proxy_type = _get_vector_row_proxy_type(vector_type)
+    instance = proxy_type.__new__(proxy_type)
+    object.__setattr__(instance, "_ecs_row_component", component)
+    object.__setattr__(instance, "_ecs_field_name", field_name)
+    return cast(VectorValue, instance)
+
+
 class Component:
     __ecs_fields__: ClassVar[tuple[str, ...]] = ()
     __ecs_schema__: ClassVar[tuple[tuple[str, str], ...]] = ()
@@ -231,7 +288,9 @@ class Component:
 
     def __init__(self, **kwargs: Any) -> None:
         object.__setattr__(self, "_ecs_proxy_enabled", False)
-        object.__setattr__(self, "_ecs_vector_cache", {})
+        object.__setattr__(self, "_ecs_proxy_mode", None)
+        object.__setattr__(self, "_ecs_entity_vector_cache", {})
+        object.__setattr__(self, "_ecs_row_vector_cache", {})
         field_names = type(self).__ecs_fields__
         uses_base_init = type(self).__dict__.get("__init__") is Component.__init__
         if not uses_base_init and not kwargs:
@@ -263,6 +322,7 @@ class Component:
             return object.__getattribute__(self, name)
 
         proxy_enabled = object.__getattribute__(self, "_ecs_proxy_enabled")
+        proxy_mode = object.__getattribute__(self, "_ecs_proxy_mode") if proxy_enabled else None
         if name.startswith("_"):
             if proxy_enabled:
                 registry = object.__getattribute__(self, "_ecs_proxy_registry")
@@ -283,19 +343,27 @@ class Component:
             if not proxy_enabled:
                 return object.__getattribute__(self, name)
 
-            cache = object.__getattribute__(self, "_ecs_vector_cache")
+            cache_name = "_ecs_row_vector_cache" if proxy_mode == "row" else "_ecs_entity_vector_cache"
+            cache = object.__getattribute__(self, cache_name)
             vector_value = cache.get(name)
             if vector_value is None:
-                registry = object.__getattribute__(self, "_ecs_proxy_registry")
-                entity_id = object.__getattribute__(self, "_ecs_proxy_entity_id")
-                storage_names = type(self).__ecs_field_storage__[name]
-                vector_value = _bind_vector_proxy(
-                    vector_type,
-                    registry,
-                    entity_id,
-                    type(self),
-                    storage_names,
-                )
+                if proxy_mode == "row":
+                    vector_value = _bind_vector_row_proxy(
+                        vector_type,
+                        self,
+                        name,
+                    )
+                else:
+                    registry = object.__getattribute__(self, "_ecs_proxy_registry")
+                    entity_id = object.__getattribute__(self, "_ecs_proxy_entity_id")
+                    storage_names = type(self).__ecs_field_storage__[name]
+                    vector_value = _bind_vector_proxy(
+                        vector_type,
+                        registry,
+                        entity_id,
+                        type(self),
+                        storage_names,
+                    )
                 cache[name] = vector_value
             return vector_value
 
@@ -303,6 +371,12 @@ class Component:
             registry = object.__getattribute__(self, "_ecs_proxy_registry")
             entity_id = object.__getattribute__(self, "_ecs_proxy_entity_id")
             storage_name = type(self).__ecs_field_storage__[name][0]
+            if proxy_mode == "row":
+                if type(self).field_kind(storage_name) == "string":
+                    return registry._get_component_field(entity_id, type(self), storage_name)
+                batch_component = object.__getattribute__(self, "_ecs_batch_component")
+                row_index = object.__getattribute__(self, "_ecs_row_index")
+                return object.__getattribute__(batch_component, name)[row_index]
             return registry._get_component_field(entity_id, type(self), storage_name)
         return object.__getattribute__(self, name)
 
@@ -312,6 +386,7 @@ class Component:
             return
 
         proxy_enabled = getattr(self, "_ecs_proxy_enabled", False)
+        proxy_mode = object.__getattribute__(self, "_ecs_proxy_mode") if proxy_enabled else None
         if name.startswith("_"):
             if proxy_enabled:
                 registry = object.__getattribute__(self, "_ecs_proxy_registry")
@@ -330,14 +405,23 @@ class Component:
         if vector_type is not None:
             normalized = _coerce_vector_value(vector_type, value)
             if proxy_enabled:
-                registry = object.__getattribute__(self, "_ecs_proxy_registry")
-                entity_id = object.__getattribute__(self, "_ecs_proxy_entity_id")
-                for axis, storage_name in zip(
-                    vector_type.__ecs_axes__, type(self).__ecs_field_storage__[name], strict=False
-                ):
-                    registry._set_component_field(
-                        entity_id, type(self), storage_name, getattr(normalized, axis)
-                    )
+                if proxy_mode == "row":
+                    batch_component = object.__getattribute__(self, "_ecs_batch_component")
+                    batch_vector = object.__getattribute__(batch_component, name)
+                    row_index = object.__getattribute__(self, "_ecs_row_index")
+                    for axis in vector_type.__ecs_axes__:
+                        object.__getattribute__(batch_vector, axis)[row_index] = getattr(
+                            normalized, axis
+                        )
+                else:
+                    registry = object.__getattribute__(self, "_ecs_proxy_registry")
+                    entity_id = object.__getattribute__(self, "_ecs_proxy_entity_id")
+                    for axis, storage_name in zip(
+                        vector_type.__ecs_axes__, type(self).__ecs_field_storage__[name], strict=False
+                    ):
+                        registry._set_component_field(
+                            entity_id, type(self), storage_name, getattr(normalized, axis)
+                        )
                 return
             object.__setattr__(self, name, normalized)
             return
@@ -346,6 +430,14 @@ class Component:
             registry = object.__getattribute__(self, "_ecs_proxy_registry")
             entity_id = object.__getattribute__(self, "_ecs_proxy_entity_id")
             storage_name = type(self).__ecs_field_storage__[name][0]
+            if proxy_mode == "row":
+                if type(self).field_kind(storage_name) == "string":
+                    registry._set_component_field(entity_id, type(self), storage_name, value)
+                else:
+                    batch_component = object.__getattribute__(self, "_ecs_batch_component")
+                    row_index = object.__getattribute__(self, "_ecs_row_index")
+                    object.__getattribute__(batch_component, name)[row_index] = value
+                return
             registry._set_component_field(entity_id, type(self), storage_name, value)
             return
 
@@ -391,10 +483,24 @@ class Component:
     def make_proxy(cls, registry: Any, entity_id: int) -> Component:
         instance = cls.__new__(cls)
         object.__setattr__(instance, "_ecs_proxy_enabled", True)
+        object.__setattr__(instance, "_ecs_proxy_mode", "entity")
         object.__setattr__(instance, "_ecs_proxy_registry", registry)
         object.__setattr__(instance, "_ecs_proxy_entity_id", entity_id)
-        object.__setattr__(instance, "_ecs_vector_cache", {})
+        object.__setattr__(instance, "_ecs_row_index", -1)
+        object.__setattr__(instance, "_ecs_batch_component", None)
+        object.__setattr__(instance, "_ecs_entity_vector_cache", {})
+        object.__setattr__(instance, "_ecs_row_vector_cache", {})
         return cast(Component, instance)
+
+    def bind_row_proxy(self, row_index: int, batch_component: Component) -> None:
+        object.__setattr__(self, "_ecs_proxy_mode", "row")
+        object.__setattr__(self, "_ecs_row_index", row_index)
+        object.__setattr__(self, "_ecs_batch_component", batch_component)
+
+    def bind_entity_proxy(self) -> None:
+        object.__setattr__(self, "_ecs_proxy_mode", "entity")
+        object.__setattr__(self, "_ecs_row_index", -1)
+        object.__setattr__(self, "_ecs_batch_component", None)
 
     @classmethod
     def make_batch(cls, registry: Any) -> Component:
@@ -404,7 +510,9 @@ class Component:
     def _make_batch(cls, registry: Any, *, registered: bool) -> Component:
         instance = cls.__new__(cls)
         object.__setattr__(instance, "_ecs_proxy_enabled", False)
-        object.__setattr__(instance, "_ecs_vector_cache", {})
+        object.__setattr__(instance, "_ecs_proxy_mode", None)
+        object.__setattr__(instance, "_ecs_entity_vector_cache", {})
+        object.__setattr__(instance, "_ecs_row_vector_cache", {})
         for field_name in cls.__ecs_fields__:
             object.__setattr__(
                 instance,

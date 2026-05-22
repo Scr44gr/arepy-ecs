@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import dataclass
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Sequence
 from typing import (
@@ -40,6 +41,14 @@ class Without(Generic[*Ts]):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class _IterationBindingCache:
+    entity_ids: tuple[int, ...]
+    entities: tuple[Entity, ...]
+    component_rows: tuple[tuple[Component, ...], ...]
+    bound_components: tuple[Component, ...]
+
+
 class Query(Generic[TEntity, TFilter]):
     def __init__(
         self,
@@ -50,8 +59,11 @@ class Query(Generic[TEntity, TFilter]):
         self._included = tuple(include)
         self._excluded = tuple(exclude)
         self._registry: Registry | None = None
+        self._iteration_cache: dict[tuple[type[Any], ...], _IterationBindingCache] = {}
 
     def set_registry(self, registry: Registry) -> None:
+        if self._registry is not registry:
+            self._iteration_cache.clear()
         self._registry = registry
 
     def get_registry(self) -> Registry:
@@ -166,8 +178,8 @@ class Query(Generic[TEntity, TFilter]):
 
     def iter_components(self, *component_types: type[Any]) -> Iterator[tuple[Any, ...]]:
         selected_types = component_types or self._included
-        for entity in self:
-            yield tuple(entity.get_component(component_type) for component_type in selected_types)
+        for _, components in self._iter_component_rows(selected_types):
+            yield components
 
     @overload
     def iter_entities_components(self) -> Iterator[tuple[TEntity, *tuple[Any, ...]]]: ...
@@ -207,12 +219,57 @@ class Query(Generic[TEntity, TFilter]):
     ) -> Iterator[tuple[TEntity, TComponent1, TComponent2, TComponent3, TComponent4]]: ...
 
     def iter_entities_components(self, *component_types: type[Any]) -> Iterator[tuple[Any, ...]]:
+        registry = self.get_registry()
         selected_types = component_types or self._included
-        for entity in self:
-            components = tuple(
-                entity.get_component(component_type) for component_type in selected_types
-            )
-            yield (entity, *components)
+        for entity_id, components in self._iter_component_rows(selected_types):
+            yield (registry._entity(entity_id), *components)
+
+    def _iter_component_rows(
+        self,
+        selected_types: tuple[type[Any], ...],
+    ) -> Iterator[tuple[int, tuple[Any, ...]]]:
+        registry = self.get_registry()
+        entity_ids = tuple(registry._query_entity_ids(self._included, self._excluded))
+        iteration_cache = self._get_iteration_cache(selected_types, entity_ids)
+        component_batches = tuple(registry.component_batch(component_type) for component_type in selected_types)
+
+        try:
+            for row_index, (entity, components) in enumerate(
+                zip(iteration_cache.entities, iteration_cache.component_rows, strict=False)
+            ):
+                for component, batch_component in zip(components, component_batches, strict=False):
+                    component.bind_row_proxy(row_index, batch_component)
+                yield (entity.get_id(), components)
+        finally:
+            for component in iteration_cache.bound_components:
+                component.bind_entity_proxy()
+
+    def _get_iteration_cache(
+        self,
+        selected_types: tuple[type[Any], ...],
+        entity_ids: tuple[int, ...],
+    ) -> _IterationBindingCache:
+        iteration_cache = self._iteration_cache.get(selected_types)
+        if iteration_cache is not None and iteration_cache.entity_ids == entity_ids:
+            return iteration_cache
+
+        registry = self.get_registry()
+        entities = tuple(registry._entity(entity_id) for entity_id in entity_ids)
+        component_rows = tuple(
+            tuple(entity.get_component(component_type) for component_type in selected_types)
+            for entity in entities
+        )
+        bound_components = tuple(
+            component for components in component_rows for component in components
+        )
+        iteration_cache = _IterationBindingCache(
+            entity_ids=entity_ids,
+            entities=entities,
+            component_rows=component_rows,
+            bound_components=bound_components,
+        )
+        self._iteration_cache[selected_types] = iteration_cache
+        return iteration_cache
 
     def matches(self, entity_signature: Iterable[str]) -> bool:
         current_signature = set(entity_signature)
