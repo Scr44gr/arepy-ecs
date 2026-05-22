@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
-from arepy_ecs import Component, Entity, Query, With, Without, World
+from arepy_ecs import Component, Entity, Query, VectorValue, With, Without, World
 from arepy_ecs.query import (
     QueryDefinitionError,
     build_query_from_annotation,
@@ -13,6 +14,14 @@ from arepy_ecs.query import (
 from arepy_ecs.systems import SystemPipeline
 
 
+class Vec2(VectorValue):
+    __slots__ = ("x", "y")
+
+    def __init__(self, x: float = 0.0, y: float = 0.0) -> None:
+        object.__setattr__(self, "x", x)
+        object.__setattr__(self, "y", y)
+
+
 class Position(Component):
     x: float = 0.0
     y: float = 0.0
@@ -21,6 +30,18 @@ class Position(Component):
 class Velocity(Component):
     x: float = 0.0
     y: float = 0.0
+
+
+class Transform(Component):
+    position: Vec2 = Vec2()
+
+
+class Motion(Component):
+    velocity: Vec2 = Vec2()
+
+
+class NameTag(Component):
+    name: str = ""
 
 
 def movement_system(query: Query[Entity, With[Position, Velocity]]) -> None:
@@ -87,6 +108,67 @@ def test_query_result_returns_batch_component_views() -> None:
     assert entities[0].get_component(Position).y == pytest.approx(3.0)
     assert entities[1].get_component(Position).x == pytest.approx(2.0)
     assert entities[1].get_component(Position).y == pytest.approx(6.0)
+
+
+def test_query_get_batch_returns_logical_vector_batches() -> None:
+    world = World("demo")
+    query: Query[Entity, With[Transform, Motion]] = Query(include=(Transform, Motion))
+    query.set_registry(world.get_registry())
+
+    world.create_entity().with_component(Transform(position=Vec2(1.0, 2.0))).with_component(
+        Motion(velocity=Vec2(0.5, -1.0))
+    ).build()
+    world.create_entity().with_component(Transform(position=Vec2(3.0, 4.0))).with_component(
+        Motion(velocity=Vec2(-2.0, 1.5))
+    ).build()
+
+    positions = query.get_batch(Transform, "position")
+    velocities = query.get_batch(Motion, "velocity")
+
+    assert isinstance(positions, Vec2)
+    assert isinstance(positions.x, np.ndarray)
+    assert positions.x.dtype == np.float32
+    assert positions.y.dtype == np.float32
+
+    positions.x += velocities.x
+    positions.y += velocities.y
+
+    entities = world.get_registry().query_entities((Transform, Motion), ())
+    assert entities[0].get_component(Transform).position.x == pytest.approx(1.5)
+    assert entities[0].get_component(Transform).position.y == pytest.approx(1.0)
+    assert entities[1].get_component(Transform).position.x == pytest.approx(1.0)
+    assert entities[1].get_component(Transform).position.y == pytest.approx(5.5)
+
+
+def test_query_get_batch_returns_scalar_field_arrays() -> None:
+    world = World("demo")
+    query: Query[Entity, With[Position]] = Query(include=(Position,))
+    query.set_registry(world.get_registry())
+
+    world.create_entity().with_component(Position(x=1.0, y=2.0)).build()
+    world.create_entity().with_component(Position(x=3.5, y=4.5)).build()
+
+    xs, ys = query.get_batch(Position, "x", "y")
+
+    assert isinstance(xs, np.ndarray)
+    assert isinstance(ys, np.ndarray)
+    assert xs.dtype == np.float32
+    assert ys.dtype == np.float32
+    assert xs.tolist() == [1.0, 3.5]
+    assert ys.tolist() == [2.0, 4.5]
+
+
+def test_query_get_batch_returns_string_field_snapshots() -> None:
+    world = World("demo")
+    query: Query[Entity, With[NameTag]] = Query(include=(NameTag,))
+    query.set_registry(world.get_registry())
+
+    world.create_entity().with_component(NameTag(name="player")).build()
+    world.create_entity().with_component(NameTag(name="enemy")).build()
+
+    name_tags = query.get_batch(NameTag)
+
+    assert name_tags.name == ["player", "enemy"]
 
 
 def test_query_requires_registry_before_iteration() -> None:

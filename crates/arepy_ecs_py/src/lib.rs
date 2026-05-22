@@ -45,6 +45,7 @@ fn buffer_format(kind: ValueKind) -> [c_char; 2] {
         ValueKind::Bool => [b'?'.cast_signed(), 0],
         ValueKind::Int32 => [b'i'.cast_signed(), 0],
         ValueKind::Float32 => [b'f'.cast_signed(), 0],
+        ValueKind::String => unreachable!("string fields do not expose raw buffers"),
     }
 }
 
@@ -70,6 +71,13 @@ fn runtime_value_to_object(py: Python<'_>, value: RuntimeValue) -> Py<PyAny> {
             let object = value
                 .into_pyobject(py)
                 .expect("primitive Python conversion should not fail");
+            object.to_owned().into_any().unbind()
+        }
+        RuntimeValue::String(value) => {
+            let object = value
+                .as_ref()
+                .into_pyobject(py)
+                .expect("string Python conversion should not fail");
             object.to_owned().into_any().unbind()
         }
     }
@@ -104,6 +112,16 @@ fn py_any_to_runtime_value(
         ValueKind::Float32 => value
             .extract::<f32>()
             .map(RuntimeValue::Float32)
+            .map_err(|_| {
+                core_error(CoreError::FieldTypeMismatch {
+                    field: field_name.to_string(),
+                    expected: kind.as_str(),
+                    received: "python object",
+                })
+            }),
+        ValueKind::String => value
+            .extract::<String>()
+            .map(|value| RuntimeValue::String(value.into()))
             .map_err(|_| {
                 core_error(CoreError::FieldTypeMismatch {
                     field: field_name.to_string(),
@@ -241,7 +259,7 @@ impl RawWorld {
     ) -> PyResult<()> {
         let mut world = lock_world(&self.inner)?;
         let schema = world.component_schema(component_name).map_err(core_error)?;
-        let mut converted = HashMap::new();
+        let mut converted = HashMap::with_capacity(schema.len());
 
         for field in schema {
             let value = values
@@ -381,6 +399,9 @@ impl RawWorld {
             FieldSnapshot::Bool(values) => PyList::new(py, values)?,
             FieldSnapshot::Int32(values) => PyList::new(py, values)?,
             FieldSnapshot::Float32(values) => PyList::new(py, values)?,
+            FieldSnapshot::String(values) => {
+                PyList::new(py, values.iter().map(|value| value.as_ref()))?
+            }
         };
         Ok(list.into_any().unbind())
     }

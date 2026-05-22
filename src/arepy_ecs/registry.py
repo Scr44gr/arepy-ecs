@@ -27,6 +27,7 @@ class Registry:
         self._native = RawWorld()
         self._entity_cache: dict[int, Entity] = {}
         self._component_types: dict[str, type[Component]] = {}
+        self._private_components: dict[tuple[int, type[Component]], dict[str, object]] = {}
         self._systems: dict[SystemPipeline, dict[SystemState, dict[System, None]]] = {
             pipeline: {state: {} for state in SystemState} for pipeline in SystemPipeline
         }
@@ -53,8 +54,16 @@ class Registry:
         return self._entity(entity_id)
 
     def kill_entity(self, entity: Entity) -> None:
-        self._native.kill_entity(entity.get_id())
-        self._entity_cache.pop(entity.get_id(), None)
+        entity_id = entity.get_id()
+        self._native.kill_entity(entity_id)
+        self._entity_cache.pop(entity_id, None)
+        private_keys = [
+            component_key
+            for component_key in self._private_components
+            if component_key[0] == entity_id
+        ]
+        for component_key in private_keys:
+            self._private_components.pop(component_key, None)
 
     def add_component(
         self,
@@ -66,6 +75,12 @@ class Registry:
         _ = sync_queries
         self._ensure_component_registered(component_type)
         self._native.add_component(entity.get_id(), component_type.__name__, component.to_dict())
+        private_values = component.private_dict()
+        component_key = (entity.get_id(), component_type)
+        if private_values:
+            self._private_components[component_key] = dict(private_values)
+        else:
+            self._private_components.pop(component_key, None)
 
     def get_component(self, entity: Entity, component_type: type[TComponent]) -> TComponent | None:
         self._ensure_component_registered(component_type)
@@ -76,6 +91,7 @@ class Registry:
     def remove_component(self, entity: Entity, component_type: type[TComponent]) -> None:
         self._ensure_component_registered(component_type)
         self._native.remove_component(entity.get_id(), component_type.__name__)
+        self._private_components.pop((entity.get_id(), component_type), None)
 
     def has_component(self, entity: Entity, component_type: type[TComponent]) -> bool:
         self._ensure_component_registered(component_type)
@@ -119,19 +135,48 @@ class Registry:
     def component_field_ndarray(
         self, component_type: type[Component], field_name: str
     ) -> np.ndarray:
-        view = self.component_field_view(component_type, field_name)
+        self._ensure_component_registered(component_type)
+        return self._component_field_ndarray_registered(component_type, field_name)
+
+    def _component_field_ndarray_registered(
+        self, component_type: type[Component], field_name: str
+    ) -> np.ndarray:
+        view = self._component_field_view_registered(component_type, field_name)
         dtype = _NUMPY_DTYPES[component_type.field_kind(field_name)]
         return np.frombuffer(view, dtype=dtype, count=len(view))  # type: ignore
 
     def component_field_array(self, component_type: type[Component], field_name: str) -> np.ndarray:
         return self.component_field_ndarray(component_type, field_name)
 
+    def component_field_values(self, component_type: type[Component], field_name: str) -> list[Any]:
+        self._ensure_component_registered(component_type)
+        return self._component_field_values_registered(component_type, field_name)
+
+    def _component_field_values_registered(
+        self, component_type: type[Component], field_name: str
+    ) -> list[Any]:
+        return self._native.component_field_values(component_type.__name__, field_name)
+
+    def component_field_batch(self, component_type: type[Component], field_name: str) -> Any:
+        self._ensure_component_registered(component_type)
+        return component_type.make_field_batch(self, field_name, registered=True)
+
     def component_batch(self, component_type: type[TComponent]) -> TComponent:
         self._ensure_component_registered(component_type)
-        return component_type.make_batch(self)  # type: ignore
+        return component_type._make_batch(self, registered=True)  # type: ignore
 
     def component_field_view(self, component_type: type[Component], field_name: str) -> FieldView:
         self._ensure_component_registered(component_type)
+        return self._component_field_view_registered(component_type, field_name)
+
+    def _component_field_view_registered(
+        self, component_type: type[Component], field_name: str
+    ) -> FieldView:
+        kind = component_type.field_kind(field_name)
+        if kind not in _NUMPY_DTYPES:
+            raise TypeError(
+                f"Field `{component_type.__name__}.{field_name}` with kind `{kind}` does not expose raw views"
+            )
         return self._native.component_field_view(component_type.__name__, field_name)
 
     def component_field_memoryview(
@@ -178,6 +223,27 @@ class Registry:
             list(component_type.__ecs_schema__),
         )
         self._component_types[component_name] = component_type
+
+    def _get_private_component_field(
+        self,
+        entity_id: int,
+        component_type: type[Component],
+        field_name: str,
+    ) -> object:
+        values = self._private_components.get((entity_id, component_type))
+        if values is not None and field_name in values:
+            return values[field_name]
+        return getattr(component_type, field_name)
+
+    def _set_private_component_field(
+        self,
+        entity_id: int,
+        component_type: type[Component],
+        field_name: str,
+        value: object,
+    ) -> None:
+        values = self._private_components.setdefault((entity_id, component_type), {})
+        values[field_name] = value
 
     def _invoke_system(self, system: System) -> None:
         arguments: list[object] = []

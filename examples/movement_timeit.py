@@ -3,18 +3,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from timeit import timeit
 
-from arepy_ecs import Component, Entity, Query, With, World
+from arepy_ecs import Component, Entity, Query, VectorValue, With, World
 from arepy_ecs.systems import SystemPipeline
 
 
-class Position(Component):
-    x: float = 0.0
-    y: float = 0.0
+class Vec2(VectorValue):
+    __slots__ = ("x", "y")
+
+    def __init__(self, x: float = 0.0, y: float = 0.0) -> None:
+        object.__setattr__(self, "x", x)
+        object.__setattr__(self, "y", y)
 
 
-class Velocity(Component):
-    x: float = 0.0
-    y: float = 0.0
+class Transform(Component):
+    position: Vec2 = Vec2()
+
+
+class Rigidbody(Component):
+    velocity: Vec2 = Vec2()
 
 
 @dataclass(slots=True)
@@ -22,16 +28,19 @@ class DeltaTime:
     value: float
 
 
-def movement_loop(query: Query[Entity, With[Position, Velocity]], dt: DeltaTime) -> None:
-    for position, velocity in query.iter_components(Position, Velocity):
+def movement_loop(query: Query[Entity, With[Transform, Rigidbody]], dt: DeltaTime) -> None:
+    for transform, rigidbody in query.iter_components(Transform, Rigidbody):
+        position = transform.position
+        velocity = rigidbody.velocity
         position.x += velocity.x * dt.value
         position.y += velocity.y * dt.value
 
 
-def movement_batch(query: Query[Entity, With[Position, Velocity]], dt: DeltaTime) -> None:
-    position, velocity = query.result(Position, Velocity)
-    position.x += velocity.x * dt.value
-    position.y += velocity.y * dt.value
+def movement_batch(query: Query[Entity, With[Transform, Rigidbody]], dt: DeltaTime) -> None:
+    transform = query.get_batch(Transform)
+    rigidbody = query.get_batch(Rigidbody)
+    transform.position.x += rigidbody.velocity.x * dt.value
+    transform.position.y += rigidbody.velocity.y * dt.value
 
 
 def build_world(entity_count: int, system) -> World:
@@ -42,10 +51,8 @@ def build_world(entity_count: int, system) -> World:
     for index in range(entity_count):
         base = float(index)
         world.create_entity().with_component(
-            Position(x=base, y=base * 0.5)
-        ).with_component(
-            Velocity(x=1.0, y=-0.5)
-        ).build()
+            Transform(position=Vec2(base, base * 0.5))
+        ).with_component(Rigidbody(velocity=Vec2(1.0, -0.5))).build()
 
     return world
 
@@ -69,8 +76,8 @@ def main() -> None:
     if batch_time > 0:
         print(f"speedup       : {loop_time / batch_time:.2f}x")
     print()
-    print("movement_batch usa Query.result() sobre el estado actual del World.")
-    print("Internamente opera con vistas densas zero-copy para Position y Velocity.")
+    print("movement_batch usa Query.get_batch() sobre el estado actual del World.")
+    print("Internamente opera con vistas densas zero-copy para Transform y Rigidbody.")
 
 
 if __name__ == "__main__":

@@ -97,16 +97,114 @@ class Query(Generic[TEntity, TFilter]):
         registry = self.get_registry()
         return tuple(registry.component_batch(component_type) for component_type in selected_types)
 
+    @overload
+    def get_batch(self, component_type: type[TComponent1], /) -> TComponent1: ...
+
+    @overload
+    def get_batch(self, component_type: type[Component], field_name: str, /) -> Any: ...
+
+    @overload
+    def get_batch(
+        self,
+        component_type: type[Component],
+        field_name: str,
+        *field_names: str,
+    ) -> tuple[Any, ...]: ...
+
+    def get_batch(self, component_type: type[Component], *field_names: str) -> Any:
+        registry = self.get_registry()
+        if not field_names:
+            return registry.component_batch(component_type)
+        if len(field_names) == 1:
+            return registry.component_field_batch(component_type, field_names[0])
+        return tuple(
+            registry.component_field_batch(component_type, field_name) for field_name in field_names
+        )
+
     def add_entity(self, entity: TEntity) -> None:
         _ = entity
 
     def remove_entity(self, entity: TEntity) -> None:
         _ = entity
 
+    @overload
+    def iter_components(self) -> Iterator[tuple[Any, ...]]: ...
+
+    @overload
+    def iter_components(
+        self,
+        component_type_1: type[TComponent1],
+        /,
+    ) -> Iterator[tuple[TComponent1]]: ...
+
+    @overload
+    def iter_components(
+        self,
+        component_type_1: type[TComponent1],
+        component_type_2: type[TComponent2],
+        /,
+    ) -> Iterator[tuple[TComponent1, TComponent2]]: ...
+
+    @overload
+    def iter_components(
+        self,
+        component_type_1: type[TComponent1],
+        component_type_2: type[TComponent2],
+        component_type_3: type[TComponent3],
+        /,
+    ) -> Iterator[tuple[TComponent1, TComponent2, TComponent3]]: ...
+
+    @overload
+    def iter_components(
+        self,
+        component_type_1: type[TComponent1],
+        component_type_2: type[TComponent2],
+        component_type_3: type[TComponent3],
+        component_type_4: type[TComponent4],
+        /,
+    ) -> Iterator[tuple[TComponent1, TComponent2, TComponent3, TComponent4]]: ...
+
     def iter_components(self, *component_types: type[Any]) -> Iterator[tuple[Any, ...]]:
         selected_types = component_types or self._included
         for entity in self:
             yield tuple(entity.get_component(component_type) for component_type in selected_types)
+
+    @overload
+    def iter_entities_components(self) -> Iterator[tuple[TEntity, *tuple[Any, ...]]]: ...
+
+    @overload
+    def iter_entities_components(
+        self,
+        component_type_1: type[TComponent1],
+        /,
+    ) -> Iterator[tuple[TEntity, TComponent1]]: ...
+
+    @overload
+    def iter_entities_components(
+        self,
+        component_type_1: type[TComponent1],
+        component_type_2: type[TComponent2],
+        /,
+    ) -> Iterator[tuple[TEntity, TComponent1, TComponent2]]: ...
+
+    @overload
+    def iter_entities_components(
+        self,
+        component_type_1: type[TComponent1],
+        component_type_2: type[TComponent2],
+        component_type_3: type[TComponent3],
+        /,
+    ) -> Iterator[tuple[TEntity, TComponent1, TComponent2, TComponent3]]: ...
+
+    @overload
+    def iter_entities_components(
+        self,
+        component_type_1: type[TComponent1],
+        component_type_2: type[TComponent2],
+        component_type_3: type[TComponent3],
+        component_type_4: type[TComponent4],
+        /,
+    ) -> Iterator[tuple[TEntity, TComponent1, TComponent2, TComponent3, TComponent4]]: ...
 
     def iter_entities_components(self, *component_types: type[Any]) -> Iterator[tuple[Any, ...]]:
         selected_types = component_types or self._included

@@ -5,10 +5,14 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
+use std::sync::Arc;
 
 use thiserror::Error;
 
 pub type CoreResult<T> = Result<T, CoreError>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StringId(u32);
 
 /// Errors emitted by the ECS storage layer.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -25,12 +29,22 @@ pub enum CoreError {
     SchemaConflict(String),
     #[error("unsupported field kind `{0}`")]
     UnsupportedFieldKind(String),
+    #[error("field `{field}` does not support exported views (kind `{kind}`) in component `{component}`")]
+    FieldDoesNotSupportViews {
+        component: String,
+        field: String,
+        kind: String,
+    },
     #[error("field `{field}` expected {expected} but received {received}")]
     FieldTypeMismatch {
         field: String,
         expected: &'static str,
         received: &'static str,
     },
+    #[error("interned string id `{0}` not found")]
+    MissingInternedString(u32),
+    #[error("string table capacity exceeded")]
+    StringTableOverflow,
     #[error("component `{0}` has active exported views; release them before changing its layout")]
     ActiveViews(String),
     #[error(
@@ -49,6 +63,7 @@ pub enum ValueKind {
     Bool,
     Int32,
     Float32,
+    String,
 }
 
 impl ValueKind {
@@ -63,6 +78,7 @@ impl ValueKind {
             "bool" | "Bool" | "numpy.bool_" | "np.bool_" => Ok(Self::Bool),
             "int32" | "Int32" | "int" | "numpy.int32" | "np.int32" => Ok(Self::Int32),
             "float32" | "Float32" | "float" | "numpy.float32" | "np.float32" => Ok(Self::Float32),
+            "string" | "String" | "str" => Ok(Self::String),
             other => Err(CoreError::UnsupportedFieldKind(other.to_string())),
         }
     }
@@ -73,6 +89,7 @@ impl ValueKind {
             Self::Bool => "bool",
             Self::Int32 => "int32",
             Self::Float32 => "float32",
+            Self::String => "string",
         }
     }
 
@@ -82,30 +99,33 @@ impl ValueKind {
             Self::Bool => std::mem::size_of::<bool>(),
             Self::Int32 => std::mem::size_of::<i32>(),
             Self::Float32 => std::mem::size_of::<f32>(),
+            Self::String => std::mem::size_of::<StringId>(),
         }
     }
 }
 
 /// Runtime payload used to move scalar values between Python bindings and Rust storage.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeValue {
     Bool(bool),
     Int32(i32),
     Float32(f32),
+    String(Arc<str>),
 }
 
 impl RuntimeValue {
     #[must_use]
-    pub fn kind(self) -> ValueKind {
+    pub fn kind(&self) -> ValueKind {
         match self {
             Self::Bool(_) => ValueKind::Bool,
             Self::Int32(_) => ValueKind::Int32,
             Self::Float32(_) => ValueKind::Float32,
+            Self::String(_) => ValueKind::String,
         }
     }
 
     #[must_use]
-    pub fn type_name(self) -> &'static str {
+    pub fn type_name(&self) -> &'static str {
         self.kind().as_str()
     }
 }
@@ -131,6 +151,7 @@ pub enum FieldSnapshot {
     Bool(Vec<bool>),
     Int32(Vec<i32>),
     Float32(Vec<f32>),
+    String(Vec<Arc<str>>),
 }
 
 #[derive(Debug)]
@@ -138,6 +159,7 @@ enum FieldColumn {
     Bool(Vec<bool>),
     Int32(Vec<i32>),
     Float32(Vec<f32>),
+    String(Vec<StringId>),
 }
 
 impl FieldColumn {
@@ -146,14 +168,23 @@ impl FieldColumn {
             ValueKind::Bool => Self::Bool(Vec::new()),
             ValueKind::Int32 => Self::Int32(Vec::new()),
             ValueKind::Float32 => Self::Float32(Vec::new()),
+            ValueKind::String => Self::String(Vec::new()),
         }
     }
 
-    fn push(&mut self, value: &RuntimeValue, field_name: &str) -> CoreResult<()> {
+    fn push(
+        &mut self,
+        value: &RuntimeValue,
+        field_name: &str,
+        string_pool: &mut StringPool,
+    ) -> CoreResult<()> {
         match (self, value) {
             (Self::Bool(values), RuntimeValue::Bool(value)) => values.push(*value),
             (Self::Int32(values), RuntimeValue::Int32(value)) => values.push(*value),
             (Self::Float32(values), RuntimeValue::Float32(value)) => values.push(*value),
+            (Self::String(values), RuntimeValue::String(value)) => {
+                values.push(string_pool.intern(Arc::clone(value))?)
+            }
             (column, received) => {
                 return Err(CoreError::FieldTypeMismatch {
                     field: field_name.to_string(),
@@ -165,19 +196,31 @@ impl FieldColumn {
         Ok(())
     }
 
-    fn get(&self, row: usize) -> RuntimeValue {
+    fn get(&self, row: usize, string_pool: &StringPool) -> CoreResult<RuntimeValue> {
         match self {
-            Self::Bool(values) => RuntimeValue::Bool(values[row]),
-            Self::Int32(values) => RuntimeValue::Int32(values[row]),
-            Self::Float32(values) => RuntimeValue::Float32(values[row]),
+            Self::Bool(values) => Ok(RuntimeValue::Bool(values[row])),
+            Self::Int32(values) => Ok(RuntimeValue::Int32(values[row])),
+            Self::Float32(values) => Ok(RuntimeValue::Float32(values[row])),
+            Self::String(values) => Ok(RuntimeValue::String(string_pool.resolve(values[row])?)),
         }
     }
 
-    fn set(&mut self, row: usize, value: &RuntimeValue, field_name: &str) -> CoreResult<()> {
+    fn set(
+        &mut self,
+        row: usize,
+        value: &RuntimeValue,
+        field_name: &str,
+        string_pool: &mut StringPool,
+    ) -> CoreResult<()> {
         match (self, value) {
             (Self::Bool(values), RuntimeValue::Bool(value)) => values[row] = *value,
             (Self::Int32(values), RuntimeValue::Int32(value)) => values[row] = *value,
             (Self::Float32(values), RuntimeValue::Float32(value)) => values[row] = *value,
+            (Self::String(values), RuntimeValue::String(value)) => {
+                let next_id = string_pool.intern(Arc::clone(value))?;
+                let previous_id = std::mem::replace(&mut values[row], next_id);
+                string_pool.release(previous_id)?;
+            }
             (column, received) => {
                 return Err(CoreError::FieldTypeMismatch {
                     field: field_name.to_string(),
@@ -189,7 +232,7 @@ impl FieldColumn {
         Ok(())
     }
 
-    fn swap_remove(&mut self, row: usize) {
+    fn swap_remove(&mut self, row: usize, string_pool: &mut StringPool) -> CoreResult<()> {
         match self {
             Self::Bool(values) => {
                 values.swap_remove(row);
@@ -200,7 +243,12 @@ impl FieldColumn {
             Self::Float32(values) => {
                 values.swap_remove(row);
             }
+            Self::String(values) => {
+                let removed_id = values.swap_remove(row);
+                string_pool.release(removed_id)?;
+            }
         }
+        Ok(())
     }
 
     fn kind(&self) -> ValueKind {
@@ -208,14 +256,21 @@ impl FieldColumn {
             Self::Bool(_) => ValueKind::Bool,
             Self::Int32(_) => ValueKind::Int32,
             Self::Float32(_) => ValueKind::Float32,
+            Self::String(_) => ValueKind::String,
         }
     }
 
-    fn snapshot(&self) -> FieldSnapshot {
+    fn snapshot(&self, string_pool: &StringPool) -> CoreResult<FieldSnapshot> {
         match self {
-            Self::Bool(values) => FieldSnapshot::Bool(values.clone()),
-            Self::Int32(values) => FieldSnapshot::Int32(values.clone()),
-            Self::Float32(values) => FieldSnapshot::Float32(values.clone()),
+            Self::Bool(values) => Ok(FieldSnapshot::Bool(values.clone())),
+            Self::Int32(values) => Ok(FieldSnapshot::Int32(values.clone())),
+            Self::Float32(values) => Ok(FieldSnapshot::Float32(values.clone())),
+            Self::String(values) => Ok(FieldSnapshot::String(
+                values
+                    .iter()
+                    .map(|string_id| string_pool.resolve(*string_id))
+                    .collect::<CoreResult<Vec<_>>>()?,
+            )),
         }
     }
 
@@ -224,6 +279,7 @@ impl FieldColumn {
             Self::Bool(values) => values.len(),
             Self::Int32(values) => values.len(),
             Self::Float32(values) => values.len(),
+            Self::String(values) => values.len(),
         }
     }
 
@@ -232,7 +288,83 @@ impl FieldColumn {
             Self::Bool(values) => values.as_mut_ptr().cast(),
             Self::Int32(values) => values.as_mut_ptr().cast(),
             Self::Float32(values) => values.as_mut_ptr().cast(),
+            Self::String(_) => unreachable!("string fields do not expose raw buffers"),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InternedString {
+    id: StringId,
+    ref_count: usize,
+}
+
+#[derive(Debug, Default)]
+struct StringPool {
+    next_id: u64,
+    free_ids: Vec<StringId>,
+    ids_by_value: HashMap<Arc<str>, InternedString>,
+    values_by_id: HashMap<StringId, Arc<str>>,
+}
+
+impl StringPool {
+    fn allocate_id(&mut self) -> CoreResult<StringId> {
+        if let Some(id) = self.free_ids.pop() {
+            return Ok(id);
+        }
+
+        let id = StringId(
+            u32::try_from(self.next_id).map_err(|_| CoreError::StringTableOverflow)?,
+        );
+        self.next_id += 1;
+        Ok(id)
+    }
+
+    fn intern(&mut self, value: Arc<str>) -> CoreResult<StringId> {
+        if let Some(entry) = self.ids_by_value.get_mut(value.as_ref()) {
+            entry.ref_count += 1;
+            return Ok(entry.id);
+        }
+
+        let id = self.allocate_id()?;
+        self.ids_by_value
+            .insert(Arc::clone(&value), InternedString { id, ref_count: 1 });
+        self.values_by_id.insert(id, value);
+        Ok(id)
+    }
+
+    fn resolve(&self, string_id: StringId) -> CoreResult<Arc<str>> {
+        self.values_by_id
+            .get(&string_id)
+            .cloned()
+            .ok_or(CoreError::MissingInternedString(string_id.0))
+    }
+
+    fn release(&mut self, string_id: StringId) -> CoreResult<()> {
+        let value = self
+            .values_by_id
+            .get(&string_id)
+            .cloned()
+            .ok_or(CoreError::MissingInternedString(string_id.0))?;
+
+        let should_remove = {
+            let entry = self
+                .ids_by_value
+                .get_mut(value.as_ref())
+                .ok_or(CoreError::MissingInternedString(string_id.0))?;
+            if entry.ref_count == 0 {
+                return Err(CoreError::MissingInternedString(string_id.0));
+            }
+            entry.ref_count -= 1;
+            entry.ref_count == 0
+        };
+
+        if should_remove {
+            self.ids_by_value.remove(value.as_ref());
+            self.values_by_id.remove(&string_id);
+            self.free_ids.push(string_id);
+        }
+        Ok(())
     }
 }
 
@@ -240,6 +372,7 @@ impl FieldColumn {
 struct ComponentTable {
     name: String,
     fields: Vec<FieldDefinition>,
+    field_indices: HashMap<String, usize>,
     entity_ids: Vec<u64>,
     rows: HashMap<u64, usize>,
     columns: Vec<FieldColumn>,
@@ -249,9 +382,15 @@ struct ComponentTable {
 impl ComponentTable {
     fn new(name: &str, fields: Vec<FieldDefinition>) -> Self {
         let columns = fields.iter().map(|field| FieldColumn::new(field.kind)).collect();
+        let field_indices = fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| (field.name.clone(), index))
+            .collect();
         Self {
             name: name.to_string(),
             fields,
+            field_indices,
             entity_ids: Vec::new(),
             rows: HashMap::new(),
             columns,
@@ -264,9 +403,9 @@ impl ComponentTable {
     }
 
     fn field_index(&self, field_name: &str) -> CoreResult<usize> {
-        self.fields
-            .iter()
-            .position(|field| field.name == field_name)
+        self.field_indices
+            .get(field_name)
+            .copied()
             .ok_or_else(|| CoreError::UnknownField {
                 component: self.name.clone(),
                 field: field_name.to_string(),
@@ -300,9 +439,10 @@ impl ComponentTable {
         &mut self,
         entity_id: u64,
         values: &HashMap<String, RuntimeValue>,
+        string_pool: &mut StringPool,
     ) -> CoreResult<()> {
         for key in values.keys() {
-            if self.fields.iter().all(|field| field.name != *key) {
+            if !self.field_indices.contains_key(key.as_str()) {
                 return Err(CoreError::UnknownField {
                     component: self.name.clone(),
                     field: key.clone(),
@@ -316,7 +456,7 @@ impl ComponentTable {
                     component: self.name.clone(),
                     field: field.name.clone(),
                 })?;
-                self.columns[index].set(row, value, &field.name)?;
+                self.columns[index].set(row, value, &field.name, string_pool)?;
             }
             return Ok(());
         }
@@ -328,7 +468,7 @@ impl ComponentTable {
                 component: self.name.clone(),
                 field: field.name.clone(),
             })?;
-            self.columns[index].push(value, &field.name)?;
+            self.columns[index].push(value, &field.name, string_pool)?;
         }
 
         self.rows.insert(entity_id, self.entity_ids.len());
@@ -336,7 +476,7 @@ impl ComponentTable {
         Ok(())
     }
 
-    fn remove(&mut self, entity_id: u64) -> CoreResult<()> {
+    fn remove(&mut self, entity_id: u64, string_pool: &mut StringPool) -> CoreResult<()> {
         self.ensure_no_active_views()?;
         let row = self
             .rows
@@ -347,7 +487,7 @@ impl ComponentTable {
             })?;
 
         for column in &mut self.columns {
-            column.swap_remove(row);
+            column.swap_remove(row, string_pool)?;
         }
         self.entity_ids.swap_remove(row);
 
@@ -362,22 +502,31 @@ impl ComponentTable {
         self.rows.contains_key(&entity_id)
     }
 
-    fn component(&self, entity_id: u64) -> CoreResult<BTreeMap<String, RuntimeValue>> {
+    fn component(
+        &self,
+        entity_id: u64,
+        string_pool: &StringPool,
+    ) -> CoreResult<BTreeMap<String, RuntimeValue>> {
         let row = self.row_for_entity(entity_id)?;
         self.ensure_row_in_bounds(entity_id, row)?;
 
         let mut values = BTreeMap::new();
         for (index, field) in self.fields.iter().enumerate() {
-            values.insert(field.name.clone(), self.columns[index].get(row));
+            values.insert(field.name.clone(), self.columns[index].get(row, string_pool)?);
         }
         Ok(values)
     }
 
-    fn field_value(&self, entity_id: u64, field_name: &str) -> CoreResult<RuntimeValue> {
+    fn field_value(
+        &self,
+        entity_id: u64,
+        field_name: &str,
+        string_pool: &StringPool,
+    ) -> CoreResult<RuntimeValue> {
         let row = self.row_for_entity(entity_id)?;
         self.ensure_row_in_bounds(entity_id, row)?;
         let index = self.field_index(field_name)?;
-        Ok(self.columns[index].get(row))
+        self.columns[index].get(row, string_pool)
     }
 
     fn set_field_value(
@@ -385,23 +534,31 @@ impl ComponentTable {
         entity_id: u64,
         field_name: &str,
         value: RuntimeValue,
+        string_pool: &mut StringPool,
     ) -> CoreResult<()> {
         let row = self.row_for_entity(entity_id)?;
         self.ensure_row_in_bounds(entity_id, row)?;
         let index = self.field_index(field_name)?;
 
-        self.columns[index].set(row, &value, field_name)
+        self.columns[index].set(row, &value, field_name, string_pool)
     }
 
-    fn field_snapshot(&self, field_name: &str) -> CoreResult<FieldSnapshot> {
+    fn field_snapshot(&self, field_name: &str, string_pool: &StringPool) -> CoreResult<FieldSnapshot> {
         let index = self.field_index(field_name)?;
-        Ok(self.columns[index].snapshot())
+        self.columns[index].snapshot(string_pool)
     }
 
     fn pin_field(&mut self, field_name: &str) -> CoreResult<FieldBufferInfo> {
         let index = self.field_index(field_name)?;
-        self.active_view_count += 1;
         let column = &mut self.columns[index];
+        if column.kind() == ValueKind::String {
+            return Err(CoreError::FieldDoesNotSupportViews {
+                component: self.name.clone(),
+                field: field_name.to_string(),
+                kind: ValueKind::String.as_str().to_string(),
+            });
+        }
+        self.active_view_count += 1;
         Ok(FieldBufferInfo {
             ptr: column.data_ptr(),
             len: column.len(),
@@ -430,6 +587,7 @@ pub struct WorldCore {
     alive_entities: HashSet<u64>,
     entity_components: HashMap<u64, HashSet<String>>,
     component_tables: HashMap<String, ComponentTable>,
+    string_pool: StringPool,
 }
 
 impl WorldCore {
@@ -515,9 +673,10 @@ impl WorldCore {
         }
 
         let component_names = self.entity_components.remove(&entity_id).unwrap_or_default();
+        let string_pool = &mut self.string_pool;
         for component_name in component_names {
             if let Some(table) = self.component_tables.get_mut(&component_name) {
-                let _ = table.remove(entity_id);
+                let _ = table.remove(entity_id, string_pool);
             }
         }
         self.alive_entities.remove(&entity_id);
@@ -538,8 +697,12 @@ impl WorldCore {
         values: &HashMap<String, RuntimeValue>,
     ) -> CoreResult<()> {
         self.ensure_entity(entity_id)?;
-        let table = self.table_mut(component_name)?;
-        table.insert_or_replace(entity_id, values)?;
+        let string_pool = &mut self.string_pool;
+        let table = self
+            .component_tables
+            .get_mut(component_name)
+            .ok_or_else(|| CoreError::MissingSchema(component_name.to_string()))?;
+        table.insert_or_replace(entity_id, values, string_pool)?;
         self.entity_components
             .entry(entity_id)
             .or_default()
@@ -555,8 +718,12 @@ impl WorldCore {
     /// or when the table is pinned by an active exported view.
     pub fn remove_component(&mut self, entity_id: u64, component_name: &str) -> CoreResult<()> {
         self.ensure_entity(entity_id)?;
-        let table = self.table_mut(component_name)?;
-        table.remove(entity_id)?;
+        let string_pool = &mut self.string_pool;
+        let table = self
+            .component_tables
+            .get_mut(component_name)
+            .ok_or_else(|| CoreError::MissingSchema(component_name.to_string()))?;
+        table.remove(entity_id, string_pool)?;
         if let Some(components) = self.entity_components.get_mut(&entity_id) {
             components.remove(component_name);
         }
@@ -587,7 +754,8 @@ impl WorldCore {
         component_name: &str,
     ) -> CoreResult<BTreeMap<String, RuntimeValue>> {
         self.ensure_entity(entity_id)?;
-        self.table(component_name)?.component(entity_id)
+        self.table(component_name)?
+            .component(entity_id, &self.string_pool)
     }
 
     /// Reads one scalar field from a component attached to an entity.
@@ -602,7 +770,8 @@ impl WorldCore {
         field_name: &str,
     ) -> CoreResult<RuntimeValue> {
         self.ensure_entity(entity_id)?;
-        self.table(component_name)?.field_value(entity_id, field_name)
+        self.table(component_name)?
+            .field_value(entity_id, field_name, &self.string_pool)
     }
 
     /// Writes one scalar field inside a component row.
@@ -619,8 +788,12 @@ impl WorldCore {
         value: RuntimeValue,
     ) -> CoreResult<()> {
         self.ensure_entity(entity_id)?;
-        self.table_mut(component_name)?
-            .set_field_value(entity_id, field_name, value)
+        let string_pool = &mut self.string_pool;
+        let table = self
+            .component_tables
+            .get_mut(component_name)
+            .ok_or_else(|| CoreError::MissingSchema(component_name.to_string()))?;
+        table.set_field_value(entity_id, field_name, value, string_pool)
     }
 
     /// Returns all entity identifiers matching the requested component filters.
@@ -654,7 +827,8 @@ impl WorldCore {
         component_name: &str,
         field_name: &str,
     ) -> CoreResult<FieldSnapshot> {
-        self.table(component_name)?.field_snapshot(field_name)
+        self.table(component_name)?
+            .field_snapshot(field_name, &self.string_pool)
     }
 
     /// Pins a component field column and returns raw buffer metadata for Python.
@@ -697,8 +871,9 @@ impl WorldCore {
 
 #[cfg(test)]
 mod tests {
-    use super::{CoreError, FieldDefinition, RuntimeValue, ValueKind, WorldCore};
+    use super::{CoreError, FieldColumn, FieldDefinition, RuntimeValue, ValueKind, WorldCore};
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn query_entities_returns_only_matching_entities() {
@@ -810,5 +985,187 @@ mod tests {
                 &HashMap::from([("x".to_string(), RuntimeValue::Float32(2.0))]),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn string_fields_are_interned_and_roundtrip_to_resolved_values() {
+        let mut world = WorldCore::new();
+        world
+            .register_component(
+                "Label",
+                vec![FieldDefinition {
+                    name: "name".to_string(),
+                    kind: ValueKind::String,
+                }],
+            )
+            .unwrap();
+
+        let first = world.create_entity();
+        let second = world.create_entity();
+        let label = RuntimeValue::String(Arc::<str>::from("player"));
+
+        world
+            .add_component(
+                first,
+                "Label",
+                &HashMap::from([("name".to_string(), label.clone())]),
+            )
+            .unwrap();
+        world
+            .add_component(
+                second,
+                "Label",
+                &HashMap::from([("name".to_string(), label)]),
+            )
+            .unwrap();
+
+        let Some(table) = world.component_tables.get("Label") else {
+            panic!("expected Label component table to exist")
+        };
+        let FieldColumn::String(values) = &table.columns[0] else {
+            panic!("expected Label.name to be stored as interned string ids")
+        };
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0], values[1]);
+
+        assert_eq!(
+            world.component_field(first, "Label", "name").unwrap(),
+            RuntimeValue::String(Arc::<str>::from("player"))
+        );
+    }
+
+    #[test]
+    fn released_string_ids_are_reused_after_killing_entities() {
+        let mut world = WorldCore::new();
+        world
+            .register_component(
+                "Label",
+                vec![FieldDefinition {
+                    name: "name".to_string(),
+                    kind: ValueKind::String,
+                }],
+            )
+            .unwrap();
+
+        let first = world.create_entity();
+        world
+            .add_component(
+                first,
+                "Label",
+                &HashMap::from([(
+                    "name".to_string(),
+                    RuntimeValue::String(Arc::<str>::from("player")),
+                )]),
+            )
+            .unwrap();
+
+        let released_id = {
+            let Some(table) = world.component_tables.get("Label") else {
+                panic!("expected Label component table to exist")
+            };
+            let FieldColumn::String(values) = &table.columns[0] else {
+                panic!("expected Label.name to be stored as interned string ids")
+            };
+            values[0]
+        };
+
+        world.kill_entity(first).unwrap();
+
+        let second = world.create_entity();
+        world
+            .add_component(
+                second,
+                "Label",
+                &HashMap::from([(
+                    "name".to_string(),
+                    RuntimeValue::String(Arc::<str>::from("enemy")),
+                )]),
+            )
+            .unwrap();
+
+        let Some(table) = world.component_tables.get("Label") else {
+            panic!("expected Label component table to exist")
+        };
+        let FieldColumn::String(values) = &table.columns[0] else {
+            panic!("expected Label.name to be stored as interned string ids")
+        };
+        assert_eq!(values, &[released_id]);
+        assert_eq!(
+            world.component_field(second, "Label", "name").unwrap(),
+            RuntimeValue::String(Arc::<str>::from("enemy"))
+        );
+    }
+
+    #[test]
+    fn released_string_ids_are_reused_after_field_updates() {
+        let mut world = WorldCore::new();
+        world
+            .register_component(
+                "Label",
+                vec![FieldDefinition {
+                    name: "name".to_string(),
+                    kind: ValueKind::String,
+                }],
+            )
+            .unwrap();
+
+        let first = world.create_entity();
+        world
+            .add_component(
+                first,
+                "Label",
+                &HashMap::from([(
+                    "name".to_string(),
+                    RuntimeValue::String(Arc::<str>::from("player")),
+                )]),
+            )
+            .unwrap();
+
+        let released_id = {
+            let Some(table) = world.component_tables.get("Label") else {
+                panic!("expected Label component table to exist")
+            };
+            let FieldColumn::String(values) = &table.columns[0] else {
+                panic!("expected Label.name to be stored as interned string ids")
+            };
+            values[0]
+        };
+
+        world
+            .set_component_field(
+                first,
+                "Label",
+                "name",
+                RuntimeValue::String(Arc::<str>::from("enemy")),
+            )
+            .unwrap();
+
+        let second = world.create_entity();
+        world
+            .add_component(
+                second,
+                "Label",
+                &HashMap::from([(
+                    "name".to_string(),
+                    RuntimeValue::String(Arc::<str>::from("player")),
+                )]),
+            )
+            .unwrap();
+
+        let Some(table) = world.component_tables.get("Label") else {
+            panic!("expected Label component table to exist")
+        };
+        let FieldColumn::String(values) = &table.columns[0] else {
+            panic!("expected Label.name to be stored as interned string ids")
+        };
+        assert_eq!(values[1], released_id);
+        assert_eq!(
+            world.component_field(first, "Label", "name").unwrap(),
+            RuntimeValue::String(Arc::<str>::from("enemy"))
+        );
+        assert_eq!(
+            world.component_field(second, "Label", "name").unwrap(),
+            RuntimeValue::String(Arc::<str>::from("player"))
+        );
     }
 }

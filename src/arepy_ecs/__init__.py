@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .builders import EntityBuilder
-from .components import Bool, Component, Float32, Int32
+from .components import Bool, Component, Float32, Int32, VectorValue
 from .entities import Entities, Entity
 from .query import Query, With, Without
 from .registry import Registry
@@ -21,6 +21,7 @@ __all__ = [
     "System",
     "SystemPipeline",
     "SystemState",
+    "VectorValue",
     "With",
     "Without",
     "World",
